@@ -379,6 +379,139 @@ double norm_random()
 
 
 
+// Resample the distribution
+// void pf_update_resample(pf_t * pf, void * random_pose_data)
+// {
+//   int i;
+//   double total;
+//   pf_sample_set_t * set_a, * set_b;
+//   pf_sample_t * sample_a, * sample_b;
+
+//   // double r,c,U;
+//   // int m;
+//   // double count_inv;
+//   double * c;
+
+//   double w_diff;
+
+//   set_a = pf->sets + pf->current_set;
+//   set_b = pf->sets + (pf->current_set + 1) % 2;
+
+//   // Build up cumulative probability table for resampling.
+//   // TODO(?): Replace this with a more efficient procedure
+//   // (e.g., http://www.network-theory.co.uk/docs/gslref/GeneralDiscreteDistributions.html)
+//   c = (double *)malloc(sizeof(double) * (set_a->sample_count + 1));
+//   c[0] = 0.0;
+//   for (i = 0; i < set_a->sample_count; i++) {
+//     c[i + 1] = c[i] + set_a->samples[i].weight;
+//   }
+
+//   // Create the kd tree for adaptive sampling
+//   pf_kdtree_clear(set_b->kdtree);
+
+//   // Draw samples from set a to create set b.
+//   total = 0;
+//   set_b->sample_count = 0;
+
+//   w_diff = 1.0 - pf->w_fast / pf->w_slow;
+//   if (w_diff < 0.0) {
+//     w_diff = 0.0;
+//   }
+//   // printf("w_diff: %9.6f\n", w_diff);
+
+//   // Can't (easily) combine low-variance sampler with KLD adaptive
+//   // sampling, so we'll take the more traditional route.
+//   /*
+//   // Low-variance resampler, taken from Probabilistic Robotics, p110
+//   count_inv = 1.0/set_a->sample_count;
+//   r = drand48() * count_inv;
+//   c = set_a->samples[0].weight;
+//   i = 0;
+//   m = 0;
+//   */
+//   while (set_b->sample_count < pf->max_samples) {
+//     sample_b = set_b->samples + set_b->sample_count++;
+
+//     if (drand48() < w_diff) {
+//       sample_b->pose = (pf->random_pose_fn)(random_pose_data);
+//     } else {
+//       // Can't (easily) combine low-variance sampler with KLD adaptive
+//       // sampling, so we'll take the more traditional route.
+//       /*
+//       // Low-variance resampler, taken from Probabilistic Robotics, p110
+//       U = r + m * count_inv;
+//       while(U>c)
+//       {
+//         i++;
+//         // Handle wrap-around by resetting counters and picking a new random
+//         // number
+//         if(i >= set_a->sample_count)
+//         {
+//           r = drand48() * count_inv;
+//           c = set_a->samples[0].weight;
+//           i = 0;
+//           m = 0;
+//           U = r + m * count_inv;
+//           continue;
+//         }
+//         c += set_a->samples[i].weight;
+//       }
+//       m++;
+//       */
+
+//       // Naive discrete event sampler
+//       double r;
+//       r = drand48();
+//       for (i = 0; i < set_a->sample_count; i++) {
+//         if ((c[i] <= r) && (r < c[i + 1])) {
+//           break;
+//         }
+//       }
+//       assert(i < set_a->sample_count);
+
+//       sample_a = set_a->samples + i;
+
+//       assert(sample_a->weight > 0);
+
+//       // Add sample to list
+//       sample_b->pose = sample_a->pose;
+//     }
+
+//     sample_b->weight = 1.0;
+//     total += sample_b->weight;
+
+//     // Add sample to histogram
+//     pf_kdtree_insert(set_b->kdtree, sample_b->pose, sample_b->weight);
+
+//     // See if we have enough samples yet
+//     if (set_b->sample_count > pf_resample_limit(pf, set_b->kdtree->leaf_count)) {
+//       break;
+//     }
+//   }
+
+//   // Reset averages, to avoid spiraling off into complete randomness.
+//   if (w_diff > 0.0) {
+//     pf->w_slow = pf->w_fast = 0.0;
+//   }
+
+//   // fprintf(stderr, "\n\n");
+
+//   // Normalize weights
+//   for (i = 0; i < set_b->sample_count; i++) {
+//     sample_b = set_b->samples + i;
+//     sample_b->weight /= total;
+//   }
+
+//   // Re-compute cluster statistics
+//   pf_cluster_stats(pf, set_b);
+
+//   // Use the newly created sample set
+//   pf->current_set = (pf->current_set + 1) % 2;
+
+//   pf_update_converged(pf);
+
+//   free(c);
+// }
 
 ///////////////////////////////////////////////////////////새로운 샘플 세트 생성//////////////////////////////////////////////
 // sample_a : 현재 샘플
@@ -406,70 +539,56 @@ void pf_update_resample(pf_t * pf, void * random_pose_data)
   set_a = pf->sets + pf->current_set;
   set_b = pf->sets + (pf->current_set + 1) % 2;
 
- ///////////////////////////////////// NEW WEIGHT FUNCTION
-  /////
-
-  /// New weight
-
   double total_weight = 0;
   double total_dist_prob = 0;
+  int rtk_signal = 1; // Set based on RTK signal status 1: original 0: gps_particle
+  
+  // RTK Signal = 1 or 0
+  if (rtk_signal == 1) {
+    // RTK Signal 1: Use current weights directly
+    for (i = 0; i < set_a->sample_count; i++) {
+      set_a->samples[i].weight = set_a->samples[i].weight;
+      total_weight += set_a->samples[i].weight;
+    }
+  }
+  else if (rtk_signal == 0) {
+    // RTK Signal 0: Calculate weight based on distance and covariance
+    for (i = 0; i < set_a->sample_count; i++) {
+      double distance = (pow(set_a->samples[i].pose.v[0] - pf->gps_x, 2) / pf->cov_matrix[0] +
+                         pow(set_a->samples[i].pose.v[1] - pf->gps_y, 2) / pf->cov_matrix[4] +
+                         pow(set_a->samples[i].pose.v[2] - pf->gps_yaw, 2) / pf->cov_matrix[8]);
 
-  for(int i=0;i<set_a->sample_count;i++)
-  {
-    //printf("GPS Position: x = %.3f, y = %.3f, yaw = %.3f\n", pf->gps_x, pf->gps_y, pf->gps_yaw);
-    double distance = (pow(set_a->samples[i].pose.v[0]-pf->gps_x, 2)/pf->cov_matrix[0] + pow(set_a->samples[i].pose.v[1]-pf->gps_y, 2)/pf->cov_matrix[4] + pow(set_a->samples[i].pose.v[2]-pf->gps_yaw, 2)/pf->cov_matrix[8]);
+      double cov = (pf->cov_matrix[0] * pf->cov_matrix[4] * pf->cov_matrix[8]);
+      total_dist_prob += 1 / sqrt(pow(2 * 3.14159, 3) * cov) * exp(-1 * distance / 2);
 
-    // printf("Sample %d - Distance: %.6f (GPS: %.3f, %.3f, %.3f -> Sample: %.3f, %.3f, %.3f)\n",
-    //        i,
-    //        distance, 
-    //        pf->gps_x, pf->gps_y, pf->gps_yaw, 
-    //        set_a->samples[i].pose.v[0], set_a->samples[i].pose.v[1], set_a->samples[i].pose.v[2]);
-    
-    //printf("Covariance Matrix: %.6f, %.6f, %.6f\n", pf->cov_matrix[0], pf->cov_matrix[4], pf->cov_matrix[8]);
-    //printf("Covariance Matrix: %.6f, %.6f, %.6f\n", pf->cov_matrix[0], pf->cov_matrix[4], pf->cov_matrix[8]);
-    double cov = (pf->cov_matrix[0] * pf->cov_matrix[4] * pf->cov_matrix[8]);
-    
-    total_dist_prob += 1/sqrt(pow(2*3.14159, 3) * cov)*exp(-1*distance/2);
+      // Multivariable Gaussian
+      double mat[3] = {set_a->samples[i].pose.v[0] - pf->gps_x, set_a->samples[i].pose.v[1] - pf->gps_y, set_a->samples[i].pose.v[2] - pf->gps_yaw};
+      double result[3];
+      double inverse[9];
+      get_inverse(pf->cov_matrix, inverse);
+      mult_1_3_x_3_3(mat, inverse, result);
+      double temp = mult_1_3_x_3_1(result, mat);
+      double d = 1 / (pow(3.14159 * 2, 1.5) * sqrt(get_determinant(pf->cov_matrix))) * exp(-0.5 * temp);
 
-    //Multivariable gausian
-    double mat[3] = {set_a->samples[i].pose.v[0]-pf->gps_x, set_a->samples[i].pose.v[1]-pf->gps_y, set_a->samples[i].pose.v[2]-pf->gps_yaw};
-    double result[3];
-    double inverse[9];
-    get_inverse(pf->cov_matrix, inverse);
-    mult_1_3_x_3_3(mat, inverse, result);
-    double temp = mult_1_3_x_3_1(result, mat);
-    double d = 1/(pow(3.14159 * 2, 1.5) * sqrt(get_determinant(pf->cov_matrix))) * exp(-0.5 * temp);
-    set_a->samples[i].weight = set_a->samples[i].weight * pf->k_l + d;
-    //set_a->samples[i].weight = set_a->samples[i].weight;
-    
-    total_weight += set_a->samples[i].weight;
-    //printf("Total weight %d: %f\n", i, total_weight);
-
+      set_a->samples[i].weight = set_a->samples[i].weight * pf->k_l + d;
+      total_weight += set_a->samples[i].weight;
+    }
   }
 
-  /// Handle total weight of 0
-  if(total_weight == 0)
-  {
-    for(int i=0;i<set_a->sample_count;i++)
-    {
+  // Handle total weight of 0
+  if (total_weight == 0) {
+    for (i = 0; i < set_a->sample_count; i++) {
       set_a->samples[i].weight = 1;
       total_weight += set_a->samples[i].weight;
     }
   }
 
-  /// Normalization
-  for(int i=0;i<set_a->sample_count;i++)
-  {
+  // Normalize weights
+  for (i = 0; i < set_a->sample_count; i++) {
     set_a->samples[i].weight = set_a->samples[i].weight / total_weight;
   }
 
-  /////
-  /////////////////////////////////////
-
-
   // Build up cumulative probability table for resampling.
-  // TODO(?): Replace this with a more efficient procedure
-  // (e.g., http://www.network-theory.co.uk/docs/gslref/GeneralDiscreteDistributions.html)
   c = (double *)malloc(sizeof(double) * (set_a->sample_count + 1));
   c[0] = 0.0;
   for (i = 0; i < set_a->sample_count; i++) {
@@ -483,90 +602,91 @@ void pf_update_resample(pf_t * pf, void * random_pose_data)
   total = 0;
   set_b->sample_count = 0;
 
-  // w_fast/w_slow가 커지면 w_diff가 작아짐
-  // w_diff가 0보다 작아지면 0으로 고정
-  // w_diff가 작아질 수록 sample_b(새로운 샘플)을 발행할 확률이 커짐
+  // Set w_diff based on RTK signal
+  if (rtk_signal == 1) {
+    w_diff = 1.0 - pf->w_fast / pf->w_slow;
+    if (w_diff < 0.0)
+      w_diff = 0.0;
+  }
+  else if (rtk_signal == 0) {
+    total_dist_prob = total_dist_prob / set_a->sample_count;
+    w_diff = 0.01 - total_dist_prob;
+  }
 
-
-/////////////////////////// CHANGED WDIFF func
-/////
-
-  total_dist_prob = total_dist_prob/set_a->sample_count;
-  
-  w_diff = 0.0;
-  //w_diff = 0.005 - total_dist_prob;
-
-  if(w_diff < 0.0)
+  if (w_diff < 0.0) {
     w_diff = 0.0;
- 
-//ORIGINAL
-  // w_diff = 1.0 - pf->w_fast / pf->w_slow;
-  // if(w_diff < 0.0)
-  //   w_diff = 0.0;
+  }
 
-/////
-////////////////////////////////////////////////////
-
-
-  // set_b에 지정된 최대 샘플 수가 채워질 때까지 반복
+  // Resampling loop
   while (set_b->sample_count < pf->max_samples) {
     sample_b = set_b->samples + set_b->sample_count++;
-    //printf("w_diff: %f\n", w_diff);
-    if (drand48() < w_diff) {
-     
-      // 기존 AMCL
-      //sample_b->pose = (pf->random_pose_fn)(random_pose_data);
 
-      ///
-      generate_random_particle(pf->gps_x, pf->gps_y, pf->gps_yaw, pf->eigen_matrix, sample_b->pose.v);
-      (void)random_pose_data;
-      ///
-    } else {
-
-      // Naive discrete event sampler
-      double r;
-      r = drand48();
-      for (i = 0; i < set_a->sample_count; i++) {
-        if ((c[i] <= r) && (r < c[i + 1])) {
-          break;
+    // RTK Signal에 따른 샘플 생성 방식 분기
+    if (rtk_signal == 1) {
+        // RTK Signal 1: 기존 AMCL 방식
+        if (drand48() < w_diff) {
+            // Generate random sample
+            sample_b->pose = (pf->random_pose_fn)(random_pose_data);
+        } else {
+            // Naive discrete event sampler
+            double r = drand48();
+            for (i = 0; i < set_a->sample_count; i++) {
+                if (c[i] <= r && r < c[i + 1]) {
+                    break;
+                }
+            }
+            assert(i < set_a->sample_count);
+            sample_a = set_a->samples + i;
+            assert(sample_a->weight > 0);
+            // Add sample to list
+            sample_b->pose = sample_a->pose;
         }
-      }
-      assert(i < set_a->sample_count);
-
-      sample_a = set_a->samples + i;
-
-      assert(sample_a->weight > 0);
-
-      // Add sample to list
-      sample_b->pose = sample_a->pose;
+    }
+    else if (rtk_signal == 0) {
+        // RTK Signal 0: GPS 기반 샘플 생성
+        if (drand48() < w_diff) {
+            // Generate random sample based on GPS
+            generate_random_particle(pf->gps_x, pf->gps_y, pf->gps_yaw, pf->eigen_matrix, sample_b->pose.v);
+        } else {
+            // Naive discrete event sampler
+            double r = drand48();
+            for (i = 0; i < set_a->sample_count; i++) {
+                if (c[i] <= r && r < c[i + 1]) {
+                    break;
+                }
+            }
+            assert(i < set_a->sample_count);
+            sample_a = set_a->samples + i;
+            assert(sample_a->weight > 0);
+            // Add sample to list
+            sample_b->pose = sample_a->pose;
+        }
     }
 
-    sample_b->weight = 1.0;
+    sample_b->weight = 1.0;  // Initial weight
     total += sample_b->weight;
 
     // Add sample to histogram
     pf_kdtree_insert(set_b->kdtree, sample_b->pose, sample_b->weight);
 
-    // See if we have enough samples yet
+    // Check if we have enough samples
     if (set_b->sample_count > pf_resample_limit(pf, set_b->kdtree->leaf_count)) {
-      break;
+        break;
     }
   }
-  
-  // Reset averages, to avoid spiraling off into complete randomness.
+
+  // Reset averages to avoid randomness
   if (w_diff > 0.0) {
     pf->w_slow = pf->w_fast = 0.0;
   }
 
-  // fprintf(stderr, "\n\n");
-
-  // Normalize weights
+  // Normalize weights of new samples in set_b
   for (i = 0; i < set_b->sample_count; i++) {
     sample_b = set_b->samples + i;
     sample_b->weight /= total;
   }
 
-  // Re-compute cluster statistics
+  // Recompute cluster statistics
   pf_cluster_stats(pf, set_b);
 
   // Use the newly created sample set
@@ -574,10 +694,9 @@ void pf_update_resample(pf_t * pf, void * random_pose_data)
 
   pf_update_converged(pf);
 
-  // c에 저장된 동적 메모리 해제
+  // Free dynamically allocated memory
   free(c);
 }
-
 
 // Compute the required number of samples, given that there are k bins
 // with samples in them.  This is taken directly from Fox et al.
@@ -660,7 +779,7 @@ void pf_cluster_stats(pf_t * pf, pf_sample_set_t * set)
   for (i = 0; i < set->sample_count; i++) {
     sample = set->samples + i;
 
-    // printf("%d %f %f %f\n", i, sample->pose.v[0], sample->pose.v[1], sample->pose.v[2]);
+    //printf("%d %f %f %f\n", i, sample->pose.v[0], sample->pose.v[1], sample->pose.v[2]);
 
     // Get the cluster label for this sample
     cidx = pf_kdtree_get_cluster(set->kdtree, sample->pose);
