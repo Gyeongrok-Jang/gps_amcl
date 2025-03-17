@@ -45,6 +45,7 @@
 
 ///
 #include "nav_msgs/msg/odometry.hpp" 
+#include "nmea_msgs/msg/sentence.hpp"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -157,6 +158,7 @@ protected:
 
   ///
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr gps_sub_;
+  rclcpp::Subscription<nmea_msgs::msg::Sentence>::SharedPtr rtk_status_sub_;
 
 #if NEW_UNIFORM_SAMPLING
   static std::vector<std::pair<int, int>> free_space_indices;
@@ -346,7 +348,7 @@ protected:
   
   ///
   void gpsPoseReceived(const nav_msgs::msg::Odometry::SharedPtr msg);
-  
+  void rtkStatusReceived(const nmea_msgs::msg::Sentence::SharedPtr msg);
   /*
    * @brief Handle a new pose estimate callback
    */
@@ -409,6 +411,7 @@ protected:
 
   ///
   std::string gps_topic_{"odometry/global"};
+  std::string rtk_status_topic_{"gps/data"};
 };
 
 }  // namespace nav2_amcl
