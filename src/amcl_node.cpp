@@ -46,6 +46,7 @@
 ///
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
+#include "nmea_msgs/msg/sentence.hpp"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
@@ -236,7 +237,12 @@ AmclNode::AmclNode(const rclcpp::NodeOptions & options)
   add_parameter(
     "gps_topic", rclcpp::ParameterValue("odometry/global")
   );
-  add_parameter("k_l", rclcpp::ParameterValue(200.0));
+
+  add_parameter(
+    "rtk_status_topic", rclcpp::ParameterValue("gps/data")
+  );
+
+  add_parameter("k_l", rclcpp::ParameterValue(200000.0));
 }
 
 AmclNode::~AmclNode()
@@ -347,6 +353,8 @@ AmclNode::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
 
   ///
   gps_sub_.reset();
+  rtk_status_sub_.reset();
+
 
   // Map
   map_sub_.reset();  //  map_sub_ may access map_, so it should be reset earlier
@@ -625,6 +633,13 @@ AmclNode::initialPoseReceived(geometry_msgs::msg::PoseWithCovarianceStamped::Sha
 //     // RCLCPP_INFO(this->get_logger(), "After Processing - GPS Pose: x=%f, y=%f, z=%f, yaw=%f",
 //     //             pf_->gps_x, pf_->gps_y, 0.0, pf_->gps_yaw);
 // }
+void 
+AmclNode::rtkStatusReceived(const nmea_msgs::msg::Sentence::SharedPtr msg)
+{
+ (void)msg;
+ RCLCPP_INFO(this->get_logger(), "RTK status callback triggered.");
+
+}
 
 void 
 AmclNode::gpsPoseReceived(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -1687,6 +1702,12 @@ AmclNode::initPubSub()
     rclcpp::SensorDataQoS(rclcpp::KeepLast(1)),
     std::bind(&AmclNode::gpsPoseReceived, this, _1), 
     rclcpp::SubscriptionOptions());
+
+rtk_status_sub_ = create_subscription<nmea_msgs::msg::Sentence>(
+  rtk_status_topic_,
+  rclcpp::SensorDataQoS(rclcpp::KeepLast(1)),
+  std::bind(&AmclNode::rtkStatusReceived, this, std::placeholders::_1));
+
 
   RCLCPP_INFO(get_logger(), "Subscribed to map topic.");
 }
