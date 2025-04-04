@@ -48,6 +48,7 @@
 #include <Eigen/Eigenvalues>
 #include "nmea_msgs/msg/sentence.hpp"
 
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 #include "tf2/utils.h"
@@ -239,10 +240,10 @@ AmclNode::AmclNode(const rclcpp::NodeOptions & options)
   );
 
   add_parameter(
-    "rtk_status_topic", rclcpp::ParameterValue("gps/data")
+    "rtk_status_topic", rclcpp::ParameterValue("nmea_sentence")
   );
 
-  add_parameter("k_l", rclcpp::ParameterValue(200000.0));
+  add_parameter("k_l", rclcpp::ParameterValue(200.0));
 }
 
 AmclNode::~AmclNode()
@@ -584,12 +585,12 @@ AmclNode::initialPoseReceived(geometry_msgs::msg::PoseWithCovarianceStamped::Sha
 //     double roll, pitch, yaw;
 //     m.getRPY(roll, pitch, yaw);
 
-
-//     // Populate covariance matrix
+//     // Populate covariance matrix with scaling factor of 10
 //     double cov_matrix[9] = {
-//         msg->pose.covariance[0], msg->pose.covariance[1], msg->pose.covariance[5],
-//         msg->pose.covariance[6], msg->pose.covariance[7], msg->pose.covariance[11],
-//         msg->pose.covariance[30], msg->pose.covariance[31], msg->pose.covariance[35]};
+//         10 * msg->pose.covariance[0], 100 * msg->pose.covariance[1], 100 * msg->pose.covariance[5],
+//         10 * msg->pose.covariance[6], 100 * msg->pose.covariance[7], 100 * msg->pose.covariance[11],
+//         10 * msg->pose.covariance[30], 1000 * msg->pose.covariance[31], 1000 * msg->pose.covariance[35]};
+
 //     memcpy(pf_->cov_matrix, cov_matrix, 9 * sizeof(double));
 
 //     // Assign GPS pose information
@@ -597,15 +598,15 @@ AmclNode::initialPoseReceived(geometry_msgs::msg::PoseWithCovarianceStamped::Sha
 //     pf_->gps_y = msg->pose.pose.position.y;
 //     pf_->gps_yaw = yaw;
 
-//     // Eigen operations for covariance
+//     // Eigen operations for covariance with scaling factor of 10
 //     Eigen::Matrix3f cov;
 //     Eigen::Matrix<float, 3, 1> eigenvalues;
 //     Eigen::Matrix3f eigenvalues2;
 //     Eigen::Matrix3f eigen_mat;
 
-//     cov << msg->pose.covariance[0], msg->pose.covariance[1], msg->pose.covariance[5],
-//            msg->pose.covariance[6], msg->pose.covariance[7], msg->pose.covariance[11],
-//            msg->pose.covariance[30], msg->pose.covariance[31], msg->pose.covariance[35];
+//     cov << 10 * msg->pose.covariance[0], 100 * msg->pose.covariance[1], 100 * msg->pose.covariance[5],
+//            10 * msg->pose.covariance[6], 100 * msg->pose.covariance[7], 100 * msg->pose.covariance[11],
+//            10 * msg->pose.covariance[30], 1000 * msg->pose.covariance[31], 1000 * msg->pose.covariance[35];
 
 //     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> eigensolver(cov);
 
@@ -622,6 +623,7 @@ AmclNode::initialPoseReceived(geometry_msgs::msg::PoseWithCovarianceStamped::Sha
 
 //     eigen_mat = eigenvalues2 * eigensolver.eigenvectors();
 
+//     // Apply the scaling factor to the eigen matrix
 //     double temp_mat[9] = {
 //         eigen_mat(0, 0), eigen_mat(0, 1), eigen_mat(0, 2),
 //         eigen_mat(1, 0), eigen_mat(1, 1), eigen_mat(1, 2),
@@ -633,13 +635,46 @@ AmclNode::initialPoseReceived(geometry_msgs::msg::PoseWithCovarianceStamped::Sha
 //     // RCLCPP_INFO(this->get_logger(), "After Processing - GPS Pose: x=%f, y=%f, z=%f, yaw=%f",
 //     //             pf_->gps_x, pf_->gps_y, 0.0, pf_->gps_yaw);
 // }
-void 
-AmclNode::rtkStatusReceived(const nmea_msgs::msg::Sentence::SharedPtr msg)
-{
- (void)msg;
- RCLCPP_INFO(this->get_logger(), "RTK status callback triggered.");
 
+void AmclNode::rtkStatusReceived(const nmea_msgs::msg::Sentence::SharedPtr msg)
+{
+    std::string sentence = msg->sentence;
+
+    // $GNGGA 문장만 처리
+    if (sentence.find("$GNGGA") != std::string::npos) {
+        if (sentence.empty()) {
+            pf_->rtk_signal = 1;  
+            return;
+        }
+
+        std::stringstream ss(sentence);
+        std::string token;
+        std::vector<std::string> fields;
+
+        while (std::getline(ss, token, ',')) {
+            fields.push_back(token);
+        }
+
+        if (fields.size() >= 10) {  
+            int position_fix = std::stoi(fields[6]);  
+            double hdop = std::stod(fields[8]);  
+
+            double rtk_signal = 1;  
+
+            if ((position_fix == 4 || position_fix == 5) && hdop < 0.8) {
+                rtk_signal = 2;  // RTK 신호
+            }
+
+            // RTK 신호 설정
+            pf_->rtk_signal = rtk_signal;
+        } else {
+            pf_->rtk_signal = 1;  // 필드가 부족하면 1 반환
+        }
+    }
+
+    // $GNGGA 문장이 아닌 경우에는 아무 처리도 하지 않음
 }
+
 
 void 
 AmclNode::gpsPoseReceived(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -1703,10 +1738,10 @@ AmclNode::initPubSub()
     std::bind(&AmclNode::gpsPoseReceived, this, _1), 
     rclcpp::SubscriptionOptions());
 
-rtk_status_sub_ = create_subscription<nmea_msgs::msg::Sentence>(
-  rtk_status_topic_,
-  rclcpp::SensorDataQoS(rclcpp::KeepLast(1)),
-  std::bind(&AmclNode::rtkStatusReceived, this, std::placeholders::_1));
+  rtk_status_sub_ = create_subscription<nmea_msgs::msg::Sentence>(
+    rtk_status_topic_,
+    rclcpp::SensorDataQoS(rclcpp::KeepLast(1)),
+    std::bind(&AmclNode::rtkStatusReceived, this, std::placeholders::_1));
 
 
   RCLCPP_INFO(get_logger(), "Subscribed to map topic.");
