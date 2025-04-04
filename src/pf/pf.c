@@ -521,7 +521,8 @@ double norm_random()
 // w_diff : w_fast와 w_slow의 차이, 랜덤 샘플링의 비율을 결정
 // c : 누적 확률 테이블. 각 항목[i]의 가중치를 모두 더하여 마지막
 
-// Resample the distribution
+
+ 
 void pf_update_resample(pf_t * pf, void * random_pose_data)
 {
   int i;
@@ -533,17 +534,21 @@ void pf_update_resample(pf_t * pf, void * random_pose_data)
   // int m;
   // double count_inv;
   double * c;
-
-  double w_diff;
+  
+  double rtk_signal = pf->rtk_signal;
+  printf("RTK Signal: %f\n", rtk_signal);
+  //double rtk_signal = 2;
+  //int rtk_signal = 2;
+  double w_diff = 0;
+  
 
   set_a = pf->sets + pf->current_set;
   set_b = pf->sets + (pf->current_set + 1) % 2;
 
   double total_weight = 0;
   double total_dist_prob = 0;
-  int rtk_signal = 1; // Set based on RTK signal status 1: original 0: gps_particle
   
-  // RTK Signal = 1 or 0
+
   if (rtk_signal == 1) {
     // RTK Signal 1: Use current weights directly
     for (i = 0; i < set_a->sample_count; i++) {
@@ -551,7 +556,7 @@ void pf_update_resample(pf_t * pf, void * random_pose_data)
       total_weight += set_a->samples[i].weight;
     }
   }
-  else if (rtk_signal == 0) {
+  else if (rtk_signal == 2) {
     // RTK Signal 0: Calculate weight based on distance and covariance
     for (i = 0; i < set_a->sample_count; i++) {
       double distance = (pow(set_a->samples[i].pose.v[0] - pf->gps_x, 2) / pf->cov_matrix[0] +
@@ -608,7 +613,7 @@ void pf_update_resample(pf_t * pf, void * random_pose_data)
     if (w_diff < 0.0)
       w_diff = 0.0;
   }
-  else if (rtk_signal == 0) {
+  else if (rtk_signal == 2) {
     total_dist_prob = total_dist_prob / set_a->sample_count;
     w_diff = 0.01 - total_dist_prob;
   }
@@ -642,7 +647,7 @@ void pf_update_resample(pf_t * pf, void * random_pose_data)
             sample_b->pose = sample_a->pose;
         }
     }
-    else if (rtk_signal == 0) {
+    else if (rtk_signal == 2) {
         // RTK Signal 0: GPS 기반 샘플 생성
         if (drand48() < w_diff) {
             // Generate random sample based on GPS
